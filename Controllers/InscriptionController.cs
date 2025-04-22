@@ -1,141 +1,198 @@
-using mission.Data;
 using mission.Models;
+using mission.Utils;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Linq;
 
 namespace mission.Controllers
 {
     /// <summary>
-    /// Contrôleur pour la gestion des inscriptions aux ateliers
+    /// Contrôleur pour la gestion des inscriptions via l'API REST
     /// </summary>
     public class InscriptionController
     {
-        private readonly DataContext _context;
+        private readonly RestApiClient _apiClient;
+        private readonly AtelierController _atelierController;
+        private readonly ParticipantController _participantController;
 
         /// <summary>
         /// Constructeur du contrôleur d'inscriptions
         /// </summary>
         public InscriptionController()
         {
-            _context = DataContext.Instance;
+            _apiClient = new RestApiClient();
+            _atelierController = new AtelierController();
+            _participantController = new ParticipantController();
         }
 
         /// <summary>
-        /// Obtient toutes les inscriptions
+        /// Obtient toutes les inscriptions de façon asynchrone
+        /// </summary>
+        public async Task<List<Inscription>> GetAllInscriptionsAsync()
+        {
+            return await _apiClient.GetAsync<List<Inscription>>("inscriptions");
+        }
+
+        /// <summary>
+        /// Obtient toutes les inscriptions (méthode synchrone pour la compatibilité)
         /// </summary>
         public List<Inscription> GetAllInscriptions()
         {
-            return _context.GetAllInscriptions();
+            return GetAllInscriptionsAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Obtient une inscription par son ID
+        /// Obtient une inscription par son ID de façon asynchrone
+        /// </summary>
+        public async Task<Inscription?> GetInscriptionByIdAsync(int id)
+        {
+            return await _apiClient.GetAsync<Inscription>($"inscriptions/{id}");
+        }
+
+        /// <summary>
+        /// Obtient une inscription par son ID (méthode synchrone pour la compatibilité)
         /// </summary>
         public Inscription? GetInscriptionById(int id)
         {
-            return _context.GetInscriptionById(id);
+            return GetInscriptionByIdAsync(id).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Obtient les inscriptions pour un atelier spécifique
+        /// Obtient les inscriptions pour un atelier spécifique de façon asynchrone
+        /// </summary>
+        public async Task<List<Inscription>> GetInscriptionsByAtelierIdAsync(int atelierId)
+        {
+            var inscriptions = await GetAllInscriptionsAsync();
+            return inscriptions.Where(i => i.AtelierId == atelierId).ToList();
+        }
+
+        /// <summary>
+        /// Obtient les inscriptions pour un atelier spécifique (méthode synchrone pour la compatibilité)
         /// </summary>
         public List<Inscription> GetInscriptionsByAtelierId(int atelierId)
         {
-            return _context.GetInscriptionsByAtelierId(atelierId);
+            return GetInscriptionsByAtelierIdAsync(atelierId).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Obtient les inscriptions pour un participant spécifique
+        /// Obtient les inscriptions pour un participant spécifique de façon asynchrone
+        /// </summary>
+        public async Task<List<Inscription>> GetInscriptionsByParticipantIdAsync(int participantId)
+        {
+            var inscriptions = await GetAllInscriptionsAsync();
+            return inscriptions.Where(i => i.ParticipantId == participantId).ToList();
+        }
+
+        /// <summary>
+        /// Obtient les inscriptions pour un participant spécifique (méthode synchrone pour la compatibilité)
         /// </summary>
         public List<Inscription> GetInscriptionsByParticipantId(int participantId)
         {
-            return _context.GetInscriptionsByParticipantId(participantId);
+            return GetInscriptionsByParticipantIdAsync(participantId).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Crée une nouvelle inscription
+        /// Crée une nouvelle inscription de façon asynchrone
         /// </summary>
-        public void CreateInscription(Inscription inscription)
+        public async Task CreateInscriptionAsync(Inscription inscription)
         {
+            // Validation des données
+            if (inscription.AtelierId <= 0)
+                throw new ArgumentException("L'ID de l'atelier est invalide.");
+
+            if (inscription.ParticipantId <= 0)
+                throw new ArgumentException("L'ID du participant est invalide.");
+
             // Vérifier que l'atelier existe
-            var atelier = _context.GetAtelierById(inscription.AtelierId);
+            var atelier = await _atelierController.GetAtelierByIdAsync(inscription.AtelierId);
             if (atelier == null)
                 throw new ArgumentException("L'atelier spécifié n'existe pas.");
 
             // Vérifier que le participant existe
-            var participant = _context.GetParticipantById(inscription.ParticipantId);
+            var participant = await _participantController.GetParticipantByIdAsync(inscription.ParticipantId);
             if (participant == null)
                 throw new ArgumentException("Le participant spécifié n'existe pas.");
 
-            // Vérifier que le participant correspond au public cible de l'atelier
-            if (atelier.PublicConcerne == TypePublic.Parents && participant.Type != TypeParticipant.Parent)
-                throw new InvalidOperationException("Cet atelier est réservé aux parents.");
-
-            if (atelier.PublicConcerne == TypePublic.AssistantesMaternelles && participant.Type != TypeParticipant.AssistanteMaternelle)
-                throw new InvalidOperationException("Cet atelier est réservé aux assistantes maternelles.");
-
-            // Vérifier que l'atelier n'est pas complet
-            if (atelier.EstComplet)
-                throw new InvalidOperationException("Cet atelier est complet.");
-
-            // Vérifier que l'atelier n'est pas déjà passé
-            if (atelier.DateDebut < DateTime.Now)
-                throw new InvalidOperationException("Impossible de s'inscrire à un atelier passé.");
-
-            // Vérifier que le participant n'est pas déjà inscrit à cet atelier
-            var existingInscription = _context.GetAllInscriptions()
-                .FirstOrDefault(i => i.AtelierId == inscription.AtelierId && i.ParticipantId == inscription.ParticipantId);
-
-            if (existingInscription != null)
+            // Vérifier que le participant n'est pas déjà inscrit
+            var existingInscriptions = await GetInscriptionsByAtelierIdAsync(inscription.AtelierId);
+            if (existingInscriptions.Any(i => i.ParticipantId == inscription.ParticipantId))
                 throw new InvalidOperationException("Ce participant est déjà inscrit à cet atelier.");
 
-            // Ajouter l'inscription
-            _context.AddInscription(inscription);
+            // Vérifier qu'il reste des places disponibles
+            int placesOccupees = existingInscriptions.Count;
+            if (placesOccupees >= atelier.PlacesDisponibles)
+                throw new InvalidOperationException("Plus de places disponibles pour cet atelier.");
+
+            // Définir la date d'inscription
+            inscription.DateInscription = DateTime.Now;
+
+            await _apiClient.PostAsync<Inscription>("inscriptions", inscription);
         }
 
         /// <summary>
-        /// Met à jour une inscription existante
+        /// Crée une nouvelle inscription (méthode synchrone pour la compatibilité)
+        /// </summary>
+        public void CreateInscription(Inscription inscription)
+        {
+            CreateInscriptionAsync(inscription).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Met à jour une inscription existante de façon asynchrone
+        /// </summary>
+        public async Task UpdateInscriptionAsync(Inscription inscription)
+        {
+            // Validation des données
+            if (inscription.Id <= 0)
+                throw new ArgumentException("L'ID de l'inscription est invalide.");
+
+            await _apiClient.PutAsync<Inscription>($"inscriptions/{inscription.Id}", inscription);
+        }
+
+        /// <summary>
+        /// Met à jour une inscription existante (méthode synchrone pour la compatibilité)
         /// </summary>
         public void UpdateInscription(Inscription inscription)
         {
-            var existingInscription = _context.GetInscriptionById(inscription.Id);
-            if (existingInscription == null)
-                throw new ArgumentException("L'inscription spécifiée n'existe pas.");
-
-            _context.UpdateInscription(inscription);
+            UpdateInscriptionAsync(inscription).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Supprime une inscription
+        /// Met à jour le statut de présence d'une inscription de façon asynchrone
         /// </summary>
-        public void DeleteInscription(int id)
+        public async Task UpdatePresenceAsync(int inscriptionId, bool present)
         {
-            var inscription = _context.GetInscriptionById(id);
-            if (inscription == null)
-                throw new ArgumentException("L'inscription spécifiée n'existe pas.");
-
-            _context.DeleteInscription(id);
-        }
-
-        /// <summary>
-        /// Marque un participant comme présent à un atelier
-        /// </summary>
-        public void MarquerPresence(int inscriptionId, bool present)
-        {
-            var inscription = _context.GetInscriptionById(inscriptionId);
+            var inscription = await GetInscriptionByIdAsync(inscriptionId);
             if (inscription == null)
                 throw new ArgumentException("L'inscription spécifiée n'existe pas.");
 
             inscription.Presence = present;
-            _context.UpdateInscription(inscription);
+            await UpdateInscriptionAsync(inscription);
         }
 
         /// <summary>
-        /// Obtient la liste des présences pour un atelier
+        /// Met à jour le statut de présence d'une inscription (méthode synchrone pour la compatibilité)
         /// </summary>
-        public List<Inscription> GetPresencesByAtelierId(int atelierId)
+        public void UpdatePresence(int inscriptionId, bool present)
         {
-            return _context.GetInscriptionsByAtelierId(atelierId);
+            UpdatePresenceAsync(inscriptionId, present).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Supprime une inscription de façon asynchrone
+        /// </summary>
+        public async Task DeleteInscriptionAsync(int id)
+        {
+            await _apiClient.DeleteAsync($"inscriptions/{id}");
+        }
+
+        /// <summary>
+        /// Supprime une inscription (méthode synchrone pour la compatibilité)
+        /// </summary>
+        public void DeleteInscription(int id)
+        {
+            DeleteInscriptionAsync(id).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -143,11 +200,11 @@ namespace mission.Controllers
         /// </summary>
         public List<string> GenererListeEmargement(int atelierId)
         {
-            var atelier = _context.GetAtelierById(atelierId);
+            var atelier = _atelierController.GetAtelierById(atelierId);
             if (atelier == null)
                 throw new ArgumentException("L'atelier spécifié n'existe pas.");
 
-            var inscriptions = _context.GetInscriptionsByAtelierId(atelierId);
+            var inscriptions = GetInscriptionsByAtelierId(atelierId);
             
             return inscriptions
                 .OrderBy(i => i.Participant?.Nom)

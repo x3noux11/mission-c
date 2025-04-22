@@ -1,45 +1,63 @@
-using mission.Data;
 using mission.Models;
+using mission.Utils;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Linq;
 
 namespace mission.Controllers
 {
     /// <summary>
-    /// Contrôleur pour la gestion des participants
+    /// Contrôleur pour la gestion des participants via l'API REST
     /// </summary>
     public class ParticipantController
     {
-        private readonly DataContext _context;
+        private readonly RestApiClient _apiClient;
 
         /// <summary>
         /// Constructeur du contrôleur de participants
         /// </summary>
         public ParticipantController()
         {
-            _context = DataContext.Instance;
+            _apiClient = new RestApiClient();
         }
 
         /// <summary>
-        /// Obtient tous les participants
+        /// Obtient tous les participants de façon asynchrone
+        /// </summary>
+        public async Task<List<Participant>> GetAllParticipantsAsync()
+        {
+            return await _apiClient.GetAsync<List<Participant>>("participants");
+        }
+
+        /// <summary>
+        /// Obtient tous les participants (méthode synchrone pour la compatibilité)
         /// </summary>
         public List<Participant> GetAllParticipants()
         {
-            return _context.GetAllParticipants();
+            return GetAllParticipantsAsync().GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Obtient un participant par son ID
+        /// Obtient un participant par son ID de façon asynchrone
+        /// </summary>
+        public async Task<Participant?> GetParticipantByIdAsync(int id)
+        {
+            return await _apiClient.GetAsync<Participant>($"participants/{id}");
+        }
+
+        /// <summary>
+        /// Obtient un participant par son ID (méthode synchrone pour la compatibilité)
         /// </summary>
         public Participant? GetParticipantById(int id)
         {
-            return _context.GetParticipantById(id);
+            return GetParticipantByIdAsync(id).GetAwaiter().GetResult();
         }
 
         /// <summary>
-        /// Crée un nouveau participant
+        /// Crée un nouveau participant de façon asynchrone
         /// </summary>
-        public void CreateParticipant(Participant participant)
+        public async Task CreateParticipantAsync(Participant participant)
         {
             // Validation des données
             if (string.IsNullOrWhiteSpace(participant.Nom))
@@ -48,22 +66,29 @@ namespace mission.Controllers
             if (string.IsNullOrWhiteSpace(participant.Prenom))
                 throw new ArgumentException("Le prénom du participant est obligatoire.");
 
-            _context.AddParticipant(participant);
+            await _apiClient.PostAsync<Participant>("participants", participant);
         }
 
         /// <summary>
-        /// Ajoute un nouveau participant
+        /// Crée un nouveau participant (méthode synchrone pour la compatibilité)
+        /// </summary>
+        public void CreateParticipant(Participant participant)
+        {
+            CreateParticipantAsync(participant).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Ajoute un nouveau participant (alias pour CreateParticipant)
         /// </summary>
         public void AddParticipant(Participant participant)
         {
-            // Réutiliser la méthode existante pour la validation
             CreateParticipant(participant);
         }
 
         /// <summary>
-        /// Met à jour un participant existant
+        /// Met à jour un participant existant de façon asynchrone
         /// </summary>
-        public void UpdateParticipant(Participant participant)
+        public async Task UpdateParticipantAsync(Participant participant)
         {
             // Validation des données
             if (participant.Id <= 0)
@@ -75,31 +100,40 @@ namespace mission.Controllers
             if (string.IsNullOrWhiteSpace(participant.Prenom))
                 throw new ArgumentException("Le prénom du participant est obligatoire.");
 
-            _context.UpdateParticipant(participant);
+            await _apiClient.PutAsync<Participant>($"participants/{participant.Id}", participant);
         }
 
         /// <summary>
-        /// Supprime un participant
+        /// Met à jour un participant existant (méthode synchrone pour la compatibilité)
+        /// </summary>
+        public void UpdateParticipant(Participant participant)
+        {
+            UpdateParticipantAsync(participant).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Supprime un participant de façon asynchrone
+        /// </summary>
+        public async Task DeleteParticipantAsync(int id)
+        {
+            await _apiClient.DeleteAsync($"participants/{id}");
+        }
+
+        /// <summary>
+        /// Supprime un participant (méthode synchrone pour la compatibilité)
         /// </summary>
         public void DeleteParticipant(int id)
         {
-            var participant = _context.GetParticipantById(id);
-            if (participant == null)
-                throw new ArgumentException("Le participant spécifié n'existe pas.");
-
-            // Vérifier si le participant a des inscriptions
-            if (participant.Inscriptions.Count > 0)
-                throw new InvalidOperationException("Impossible de supprimer un participant qui a des inscriptions.");
-
-            _context.DeleteParticipant(id);
+            DeleteParticipantAsync(id).GetAwaiter().GetResult();
         }
 
         /// <summary>
         /// Obtient les participants par type (parent ou assistante maternelle)
         /// </summary>
-        public List<Participant> GetParticipantsByType(TypeParticipant type)
+        public async Task<List<Participant>> GetParticipantsByTypeAsync(TypeParticipant type)
         {
-            return _context.GetAllParticipants()
+            var participants = await GetAllParticipantsAsync();
+            return participants
                 .Where(p => p.Type == type)
                 .OrderBy(p => p.Nom)
                 .ThenBy(p => p.Prenom)
@@ -107,19 +141,36 @@ namespace mission.Controllers
         }
 
         /// <summary>
-        /// Recherche des participants par nom ou prénom
+        /// Obtient les participants par type (méthode synchrone pour la compatibilité)
         /// </summary>
-        public List<Participant> SearchParticipants(string searchTerm)
+        public List<Participant> GetParticipantsByType(TypeParticipant type)
+        {
+            return GetParticipantsByTypeAsync(type).GetAwaiter().GetResult();
+        }
+
+        /// <summary>
+        /// Recherche des participants par nom ou prénom de façon asynchrone
+        /// </summary>
+        public async Task<List<Participant>> SearchParticipantsAsync(string searchTerm)
         {
             if (string.IsNullOrWhiteSpace(searchTerm))
-                return GetAllParticipants();
+                return await GetAllParticipantsAsync();
 
-            return _context.GetAllParticipants()
+            var participants = await GetAllParticipantsAsync();
+            return participants
                 .Where(p => p.Nom.Contains(searchTerm, StringComparison.OrdinalIgnoreCase) || 
                             p.Prenom.Contains(searchTerm, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(p => p.Nom)
                 .ThenBy(p => p.Prenom)
                 .ToList();
+        }
+
+        /// <summary>
+        /// Recherche des participants par nom ou prénom (méthode synchrone pour la compatibilité)
+        /// </summary>
+        public List<Participant> SearchParticipants(string searchTerm)
+        {
+            return SearchParticipantsAsync(searchTerm).GetAwaiter().GetResult();
         }
     }
 }
