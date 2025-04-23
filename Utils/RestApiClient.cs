@@ -1,6 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -12,126 +13,134 @@ namespace mission.Utils
     /// </summary>
     public class RestApiClient : IDisposable
     {
-        private readonly HttpClient _client;
+        private readonly HttpClient _httpClient;
         private readonly string _baseUrl;
-        private readonly JsonSerializerOptions _jsonOptions;
+        private static readonly JsonSerializerOptions _jsonOptions = new()
+        {
+            PropertyNameCaseInsensitive = true
+        };
+        private bool _isConnected = false;
+        private readonly System.Timers.Timer _connectionCheckTimer;
+
+        public event EventHandler<bool>? ConnectionStatusChanged;
+
+        public bool IsConnected
+        {
+            get => _isConnected;
+            private set
+            {
+                if (_isConnected != value)
+                {
+                    _isConnected = value;
+                    ConnectionStatusChanged?.Invoke(this, value);
+                }
+            }
+        }
 
         /// <summary>
         /// Initialise une nouvelle instance de la classe RestApiClient
         /// </summary>
-        public RestApiClient(string baseUrl = "http://172.29.102.10/Api_Rest/")
+        public RestApiClient()
         {
-            _baseUrl = baseUrl;
-            _client = new HttpClient();
-            _client.BaseAddress = new Uri(_baseUrl);
-            _client.DefaultRequestHeaders.Accept.Clear();
-            _client.DefaultRequestHeaders.Accept.Add(
-                new MediaTypeWithQualityHeaderValue("application/json"));
+            _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromSeconds(2);
+            _baseUrl = "http://172.29.21.19/api"; // URL de base du serveur API
 
-            _jsonOptions = new JsonSerializerOptions
+            _connectionCheckTimer = new System.Timers.Timer(5000); // Vérifie la connexion toutes les 5 secondes
+            _connectionCheckTimer.Elapsed += async (s, e) => await CheckConnectionAsync();
+            _connectionCheckTimer.Start();
+        }
+
+        private async Task CheckConnectionAsync()
+        {
+            try
             {
-                PropertyNameCaseInsensitive = true
-            };
+                var response = await _httpClient.GetAsync($"{_baseUrl}/health");
+                IsConnected = response.IsSuccessStatusCode;
+            }
+            catch
+            {
+                IsConnected = false;
+            }
         }
 
         /// <summary>
         /// Effectue une requête GET et retourne les données désérialisées
         /// </summary>
-        public async Task<T> GetAsync<T>(string endpoint)
+        public async Task<T?> GetAsync<T>(string endpoint)
         {
             try
             {
-                HttpResponseMessage response = await _client.GetAsync(endpoint);
+                var response = await _httpClient.GetAsync($"{_baseUrl}/{endpoint}");
                 response.EnsureSuccessStatusCode();
-                var stream = await response.Content.ReadAsStreamAsync();
-                return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions);
+                
+                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions);
             }
-            catch (HttpRequestException ex)
+            catch
             {
-                Console.WriteLine($"Erreur HTTP GET sur {endpoint}: {ex.Message}");
-                throw;
-            }
-            catch (JsonException ex)
-            {
-                Console.WriteLine($"Erreur de désérialisation JSON sur GET {endpoint}: {ex.Message}");
-                throw;
+                return default;
             }
         }
 
         /// <summary>
         /// Effectue une requête POST et retourne les données désérialisées
         /// </summary>
-        public async Task<T> PostAsync<T>(string endpoint, T data)
+        public async Task<T?> PostAsync<T>(string endpoint, object data)
         {
             try
             {
-                string jsonPayload = JsonSerializer.Serialize(data, _jsonOptions);
-                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-                HttpResponseMessage response = await _client.PostAsync(endpoint, content);
+                var content = JsonContent.Create(data);
+                var response = await _httpClient.PostAsync($"{_baseUrl}/{endpoint}", content);
                 response.EnsureSuccessStatusCode();
-
-                var stream = await response.Content.ReadAsStreamAsync();
-                return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions);
+                
+                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions);
             }
-            catch (HttpRequestException ex)
+            catch
             {
-                Console.WriteLine($"Erreur HTTP POST sur {endpoint}: {ex.Message}");
-                throw;
-            }
-            catch (JsonException ex)
-            {
-                Console.WriteLine($"Erreur de sérialisation/désérialisation JSON sur POST {endpoint}: {ex.Message}");
-                throw;
+                return default;
             }
         }
 
         /// <summary>
         /// Effectue une requête PUT et retourne les données désérialisées
         /// </summary>
-        public async Task PutAsync<T>(string endpoint, T data)
+        public async Task<T?> PutAsync<T>(string endpoint, object data)
         {
             try
             {
-                string jsonPayload = JsonSerializer.Serialize(data, _jsonOptions);
-                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
-                HttpResponseMessage response = await _client.PutAsync(endpoint, content);
+                var content = JsonContent.Create(data);
+                var response = await _httpClient.PutAsync($"{_baseUrl}/{endpoint}", content);
                 response.EnsureSuccessStatusCode();
+                
+                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions);
             }
-            catch (HttpRequestException ex)
+            catch
             {
-                Console.WriteLine($"Erreur HTTP PUT sur {endpoint}: {ex.Message}");
-                throw;
-            }
-            catch (JsonException ex)
-            {
-                Console.WriteLine($"Erreur de sérialisation JSON sur PUT {endpoint}: {ex.Message}");
-                throw;
+                return default;
             }
         }
 
         /// <summary>
         /// Effectue une requête DELETE et retourne un statut de succès
         /// </summary>
-        public async Task DeleteAsync(string endpoint)
+        public async Task<bool> DeleteAsync(string endpoint)
         {
             try
             {
-                HttpResponseMessage response = await _client.DeleteAsync(endpoint);
-                response.EnsureSuccessStatusCode();
+                var response = await _httpClient.DeleteAsync($"{_baseUrl}/{endpoint}");
+                return response.IsSuccessStatusCode;
             }
-            catch (HttpRequestException ex)
+            catch
             {
-                Console.WriteLine($"Erreur HTTP DELETE sur {endpoint}: {ex.Message}");
-                throw;
+                return false;
             }
         }
 
         public void Dispose()
         {
-            _client?.Dispose();
-            GC.SuppressFinalize(this);
+            _connectionCheckTimer?.Stop();
+            _connectionCheckTimer?.Dispose();
+            _httpClient?.Dispose();
         }
     }
 } 

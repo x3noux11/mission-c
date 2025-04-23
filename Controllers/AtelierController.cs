@@ -13,6 +13,9 @@ namespace mission.Controllers
     public class AtelierController : IDisposable
     {
         private readonly RestApiClient _apiClient;
+        private readonly LocalStorage _localStorage;
+        private List<Atelier> _localCache = new List<Atelier>();
+        private bool _isInitialized = false;
 
         /// <summary>
         /// Constructeur du contrôleur d'ateliers
@@ -20,6 +23,72 @@ namespace mission.Controllers
         public AtelierController()
         {
             _apiClient = new RestApiClient();
+            _localStorage = new LocalStorage();
+            _apiClient.ConnectionStatusChanged += OnConnectionStatusChanged;
+            _ = InitializeAsync(); // Initialisation asynchrone sans attendre
+        }
+
+        public bool IsApiConnected => _apiClient.IsConnected;
+
+        private async void OnConnectionStatusChanged(object sender, bool isConnected)
+        {
+            if (isConnected && _isInitialized)
+            {
+                try
+                {
+                    await SynchronizeDataAsync();
+                }
+                catch
+                {
+                    // Ignorer les erreurs de synchronisation
+                }
+            }
+        }
+
+        private async Task InitializeAsync()
+        {
+            if (!_isInitialized)
+            {
+                try
+                {
+                    _localCache = await _localStorage.LoadAsync<List<Atelier>>("ateliers") ?? new List<Atelier>();
+                }
+                catch
+                {
+                    _localCache = new List<Atelier>();
+                }
+
+                _isInitialized = true;
+
+                if (IsApiConnected)
+                {
+                    try
+                    {
+                        await SynchronizeDataAsync();
+                    }
+                    catch
+                    {
+                        // Ignorer les erreurs de synchronisation
+                    }
+                }
+            }
+        }
+
+        private async Task SynchronizeDataAsync()
+        {
+            try
+            {
+                var remoteAteliers = await _apiClient.GetAsync<List<Atelier>>("ateliers");
+                if (remoteAteliers != null)
+                {
+                    _localCache = remoteAteliers;
+                    await _localStorage.SaveAsync("ateliers", _localCache);
+                }
+            }
+            catch
+            {
+                // En cas d'erreur, on continue avec les données locales
+            }
         }
 
         /// <summary>
@@ -27,7 +96,11 @@ namespace mission.Controllers
         /// </summary>
         public async Task<List<Atelier>> GetAllAteliersAsync()
         {
-            return await _apiClient.GetAsync<List<Atelier>>("ateliers");
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+            return _localCache;
         }
 
         /// <summary>
@@ -43,7 +116,11 @@ namespace mission.Controllers
         /// </summary>
         public async Task<Atelier?> GetAtelierByIdAsync(int id)
         {
-            return await _apiClient.GetAsync<Atelier>($"ateliers/{id}");
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+            return _localCache.FirstOrDefault(a => a.Id == id);
         }
 
         /// <summary>
@@ -57,72 +134,179 @@ namespace mission.Controllers
         /// <summary>
         /// Crée un nouvel atelier de façon asynchrone
         /// </summary>
-        public async Task CreateAtelierAsync(Atelier atelier)
+        public async Task<bool> CreateAtelierAsync(Atelier atelier)
         {
-            // Validation des données
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+
             if (string.IsNullOrWhiteSpace(atelier.Titre))
-                throw new ArgumentException("Le titre de l'atelier est obligatoire.");
+                return false;
 
             if (atelier.DateDebut == default)
-                throw new ArgumentException("La date et l'heure de l'atelier sont obligatoires.");
+                return false;
 
             if (atelier.PlacesDisponibles <= 0)
-                throw new ArgumentException("Le nombre de places disponibles doit être supérieur à zéro.");
+                return false;
 
-            await _apiClient.PostAsync<Atelier>("ateliers", atelier);
+            // Générer un ID temporaire négatif pour les nouveaux ateliers hors ligne
+            if (atelier.Id == 0)
+            {
+                atelier.Id = _localCache.Any() ? _localCache.Min(a => a.Id) - 1 : -1;
+            }
+
+            _localCache.Add(atelier);
+
+            try
+            {
+                await _localStorage.SaveAsync("ateliers", _localCache);
+            }
+            catch
+            {
+                // En cas d'erreur de sauvegarde locale, on continue
+            }
+
+            if (IsApiConnected)
+            {
+                try
+                {
+                    var createdAtelier = await _apiClient.PostAsync<Atelier>("ateliers", atelier);
+                    if (createdAtelier != null)
+                    {
+                        var index = _localCache.FindIndex(a => a.Id == atelier.Id);
+                        if (index >= 0)
+                        {
+                            _localCache[index] = createdAtelier;
+                            await _localStorage.SaveAsync("ateliers", _localCache);
+                        }
+                    }
+                }
+                catch
+                {
+                    // En cas d'erreur, on garde la version locale
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
         /// Crée un nouvel atelier (méthode synchrone pour la compatibilité)
         /// </summary>
-        public void CreateAtelier(Atelier atelier)
+        public bool CreateAtelier(Atelier atelier)
         {
-            CreateAtelierAsync(atelier).GetAwaiter().GetResult();
+            return CreateAtelierAsync(atelier).GetAwaiter().GetResult();
         }
 
         /// <summary>
         /// Met à jour un atelier existant de façon asynchrone
         /// </summary>
-        public async Task UpdateAtelierAsync(Atelier atelier)
+        public async Task<bool> UpdateAtelierAsync(Atelier atelier)
         {
-            // Validation des données
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+
             if (atelier.Id <= 0)
-                throw new ArgumentException("L'ID de l'atelier est invalide.");
+                return false;
                 
             if (string.IsNullOrWhiteSpace(atelier.Titre))
-                throw new ArgumentException("Le titre de l'atelier est obligatoire.");
+                return false;
 
             if (atelier.DateDebut == default)
-                throw new ArgumentException("La date et l'heure de l'atelier sont obligatoires.");
+                return false;
 
             if (atelier.PlacesDisponibles <= 0)
-                throw new ArgumentException("Le nombre de places disponibles doit être supérieur à zéro.");
+                return false;
 
-            await _apiClient.PutAsync<Atelier>($"ateliers/{atelier.Id}", atelier);
+            var index = _localCache.FindIndex(a => a.Id == atelier.Id);
+            if (index >= 0)
+            {
+                _localCache[index] = atelier;
+
+                try
+                {
+                    await _localStorage.SaveAsync("ateliers", _localCache);
+                }
+                catch
+                {
+                    // En cas d'erreur de sauvegarde locale, on continue
+                }
+
+                if (IsApiConnected)
+                {
+                    try
+                    {
+                        await _apiClient.PutAsync<Atelier>($"ateliers/{atelier.Id}", atelier);
+                    }
+                    catch
+                    {
+                        // En cas d'erreur, on garde la version locale
+                    }
+                }
+
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
         /// Met à jour un atelier existant (méthode synchrone pour la compatibilité)
         /// </summary>
-        public void UpdateAtelier(Atelier atelier)
+        public bool UpdateAtelier(Atelier atelier)
         {
-            UpdateAtelierAsync(atelier).GetAwaiter().GetResult();
+            return UpdateAtelierAsync(atelier).GetAwaiter().GetResult();
         }
 
         /// <summary>
         /// Supprime un atelier de façon asynchrone
         /// </summary>
-        public async Task DeleteAtelierAsync(int id)
+        public async Task<bool> DeleteAtelierAsync(int id)
         {
-            await _apiClient.DeleteAsync($"ateliers/{id}");
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+
+            var index = _localCache.FindIndex(a => a.Id == id);
+            if (index >= 0)
+            {
+                _localCache.RemoveAt(index);
+
+                try
+                {
+                    await _localStorage.SaveAsync("ateliers", _localCache);
+                }
+                catch
+                {
+                    // En cas d'erreur de sauvegarde locale, on continue
+                }
+
+                if (IsApiConnected)
+                {
+                    try
+                    {
+                        await _apiClient.DeleteAsync($"ateliers/{id}");
+                    }
+                    catch
+                    {
+                        // En cas d'erreur, on garde la version locale
+                    }
+                }
+
+                return true;
+            }
+            return false;
         }
 
         /// <summary>
         /// Supprime un atelier (méthode synchrone pour la compatibilité)
         /// </summary>
-        public void DeleteAtelier(int id)
+        public bool DeleteAtelier(int id)
         {
-            DeleteAtelierAsync(id).GetAwaiter().GetResult();
+            return DeleteAtelierAsync(id).GetAwaiter().GetResult();
         }
 
         /// <summary>
@@ -130,8 +314,11 @@ namespace mission.Controllers
         /// </summary>
         public async Task<List<Atelier>> GetAteliersByPeriodAsync(DateTime debut, DateTime fin)
         {
-            var ateliers = await GetAllAteliersAsync();
-            return ateliers
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+            return _localCache
                 .Where(a => a.DateDebut >= debut && a.DateDebut <= fin)
                 .OrderBy(a => a.DateDebut)
                 .ToList();
@@ -150,8 +337,11 @@ namespace mission.Controllers
         /// </summary>
         public async Task<List<Atelier>> GetAteliersAVenirAsync()
         {
-            var ateliers = await GetAllAteliersAsync();
-            return ateliers
+            if (!_isInitialized)
+            {
+                await InitializeAsync();
+            }
+            return _localCache
                 .Where(a => a.DateDebut > DateTime.Now)
                 .OrderBy(a => a.DateDebut)
                 .ToList();
