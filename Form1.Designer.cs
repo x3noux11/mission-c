@@ -32,6 +32,9 @@ namespace mission
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(2560, 1440);
             this.Name = "MainForm";
+            this.Text = "Main Form"; // Added a title for the form
+            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen; // Set the start position
+            // Add any additional initialization for controls here
         }
 
         #endregion

@@ -10,7 +10,7 @@ namespace mission.Controllers
     /// <summary>
     /// Contrôleur pour la gestion des ateliers via l'API REST
     /// </summary>
-    public class AtelierController
+    public class AtelierController : IDisposable
     {
         private readonly RestApiClient _apiClient;
 
@@ -63,7 +63,7 @@ namespace mission.Controllers
             if (string.IsNullOrWhiteSpace(atelier.Titre))
                 throw new ArgumentException("Le titre de l'atelier est obligatoire.");
 
-            if (atelier.DateHeure == default)
+            if (atelier.DateDebut == default)
                 throw new ArgumentException("La date et l'heure de l'atelier sont obligatoires.");
 
             if (atelier.PlacesDisponibles <= 0)
@@ -92,7 +92,7 @@ namespace mission.Controllers
             if (string.IsNullOrWhiteSpace(atelier.Titre))
                 throw new ArgumentException("Le titre de l'atelier est obligatoire.");
 
-            if (atelier.DateHeure == default)
+            if (atelier.DateDebut == default)
                 throw new ArgumentException("La date et l'heure de l'atelier sont obligatoires.");
 
             if (atelier.PlacesDisponibles <= 0)
@@ -132,8 +132,8 @@ namespace mission.Controllers
         {
             var ateliers = await GetAllAteliersAsync();
             return ateliers
-                .Where(a => a.DateHeure >= debut && a.DateHeure <= fin)
-                .OrderBy(a => a.DateHeure)
+                .Where(a => a.DateDebut >= debut && a.DateDebut <= fin)
+                .OrderBy(a => a.DateDebut)
                 .ToList();
         }
 
@@ -152,8 +152,8 @@ namespace mission.Controllers
         {
             var ateliers = await GetAllAteliersAsync();
             return ateliers
-                .Where(a => a.DateHeure > DateTime.Now)
-                .OrderBy(a => a.DateHeure)
+                .Where(a => a.DateDebut > DateTime.Now)
+                .OrderBy(a => a.DateDebut)
                 .ToList();
         }
 
@@ -163,6 +163,11 @@ namespace mission.Controllers
         public List<Atelier> GetAteliersAVenir()
         {
             return GetAteliersAVenirAsync().GetAwaiter().GetResult();
+        }
+
+        public void Dispose()
+        {
+            _apiClient?.Dispose();
         }
     }
 }

@@ -1,7 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Net.Http;
-using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -11,22 +10,28 @@ namespace mission.Utils
     /// <summary>
     /// Client pour communiquer avec l'API REST
     /// </summary>
-    public class RestApiClient
+    public class RestApiClient : IDisposable
     {
-        private readonly HttpClient _httpClient;
+        private readonly HttpClient _client;
         private readonly string _baseUrl;
-        private static readonly JsonSerializerOptions _jsonOptions = new()
-        {
-            PropertyNameCaseInsensitive = true
-        };
+        private readonly JsonSerializerOptions _jsonOptions;
 
         /// <summary>
         /// Initialise une nouvelle instance de la classe RestApiClient
         /// </summary>
-        public RestApiClient()
+        public RestApiClient(string baseUrl = "http://172.29.102.10/Api_Rest/")
         {
-            _httpClient = new HttpClient();
-            _baseUrl = "http://172.29.21.19/api"; // URL de base du serveur API
+            _baseUrl = baseUrl;
+            _client = new HttpClient();
+            _client.BaseAddress = new Uri(_baseUrl);
+            _client.DefaultRequestHeaders.Accept.Clear();
+            _client.DefaultRequestHeaders.Accept.Add(
+                new MediaTypeWithQualityHeaderValue("application/json"));
+
+            _jsonOptions = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            };
         }
 
         /// <summary>
@@ -36,73 +41,97 @@ namespace mission.Utils
         {
             try
             {
-                var response = await _httpClient.GetAsync($"{_baseUrl}/{endpoint}");
+                HttpResponseMessage response = await _client.GetAsync(endpoint);
                 response.EnsureSuccessStatusCode();
-                
-                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions) 
-                    ?? throw new Exception($"Échec de désérialisation de la réponse de {endpoint}");
+                var stream = await response.Content.ReadAsStreamAsync();
+                return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions);
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
-                throw new Exception($"Erreur lors de la requête GET à {endpoint}: {ex.Message}", ex);
+                Console.WriteLine($"Erreur HTTP GET sur {endpoint}: {ex.Message}");
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"Erreur de désérialisation JSON sur GET {endpoint}: {ex.Message}");
+                throw;
             }
         }
 
         /// <summary>
         /// Effectue une requête POST et retourne les données désérialisées
         /// </summary>
-        public async Task<T> PostAsync<T>(string endpoint, object data)
+        public async Task<T> PostAsync<T>(string endpoint, T data)
         {
             try
             {
-                var content = JsonContent.Create(data);
-                var response = await _httpClient.PostAsync($"{_baseUrl}/{endpoint}", content);
+                string jsonPayload = JsonSerializer.Serialize(data, _jsonOptions);
+                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await _client.PostAsync(endpoint, content);
                 response.EnsureSuccessStatusCode();
-                
-                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions) 
-                    ?? throw new Exception($"Échec de désérialisation de la réponse de {endpoint}");
+
+                var stream = await response.Content.ReadAsStreamAsync();
+                return await JsonSerializer.DeserializeAsync<T>(stream, _jsonOptions);
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
-                throw new Exception($"Erreur lors de la requête POST à {endpoint}: {ex.Message}", ex);
+                Console.WriteLine($"Erreur HTTP POST sur {endpoint}: {ex.Message}");
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"Erreur de sérialisation/désérialisation JSON sur POST {endpoint}: {ex.Message}");
+                throw;
             }
         }
 
         /// <summary>
         /// Effectue une requête PUT et retourne les données désérialisées
         /// </summary>
-        public async Task<T> PutAsync<T>(string endpoint, object data)
+        public async Task PutAsync<T>(string endpoint, T data)
         {
             try
             {
-                var content = JsonContent.Create(data);
-                var response = await _httpClient.PutAsync($"{_baseUrl}/{endpoint}", content);
+                string jsonPayload = JsonSerializer.Serialize(data, _jsonOptions);
+                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                HttpResponseMessage response = await _client.PutAsync(endpoint, content);
                 response.EnsureSuccessStatusCode();
-                
-                return await response.Content.ReadFromJsonAsync<T>(_jsonOptions) 
-                    ?? throw new Exception($"Échec de désérialisation de la réponse de {endpoint}");
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
-                throw new Exception($"Erreur lors de la requête PUT à {endpoint}: {ex.Message}", ex);
+                Console.WriteLine($"Erreur HTTP PUT sur {endpoint}: {ex.Message}");
+                throw;
+            }
+            catch (JsonException ex)
+            {
+                Console.WriteLine($"Erreur de sérialisation JSON sur PUT {endpoint}: {ex.Message}");
+                throw;
             }
         }
 
         /// <summary>
         /// Effectue une requête DELETE et retourne un statut de succès
         /// </summary>
-        public async Task<bool> DeleteAsync(string endpoint)
+        public async Task DeleteAsync(string endpoint)
         {
             try
             {
-                var response = await _httpClient.DeleteAsync($"{_baseUrl}/{endpoint}");
+                HttpResponseMessage response = await _client.DeleteAsync(endpoint);
                 response.EnsureSuccessStatusCode();
-                return true;
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
-                throw new Exception($"Erreur lors de la requête DELETE à {endpoint}: {ex.Message}", ex);
+                Console.WriteLine($"Erreur HTTP DELETE sur {endpoint}: {ex.Message}");
+                throw;
             }
+        }
+
+        public void Dispose()
+        {
+            _client?.Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 } 
